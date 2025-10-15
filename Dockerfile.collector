@@ -1,0 +1,21 @@
+# Dockerfile for Tibber collector
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy collector script
+COPY tibber_collector.py .
+
+# Default command (can be overridden in docker-compose)
+CMD ["python", "tibber_collector.py", "--db-path", "/data/tibber_data.duckdb"]

@@ -18,6 +18,7 @@ real-time WebSocket API or the REST Data API.
 
 import httpx
 import polars as pl
+import duckdb
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -32,22 +33,22 @@ class TibberCollector:
     """Collects energy consumption data from Tibber API"""
     
     def __init__(
-        self, 
+        self,
         access_token: Optional[str] = None,
         home_id: Optional[str] = None,
-        data_file: str = "tibber_consumption_data.csv"
+        db_path: str = "tibber_data.duckdb"
     ):
         """
         Initialize the Tibber collector
-        
+
         Args:
             access_token: Tibber API access token (or set TIBBER_TOKEN env var)
             home_id: Tibber home ID (or set TIBBER_HOME_ID env var)
-            data_file: Path to CSV file for storing data
+            db_path: Path to DuckDB database file
         """
         self.access_token = access_token or os.getenv('TIBBER_TOKEN')
         self.home_id = home_id or os.getenv('TIBBER_HOME_ID')
-        self.data_file = Path(data_file)
+        self.db_path = Path(db_path)
         self.api_url = 'https://api.tibber.com/v1-beta/gql'
         
         if not self.access_token:
@@ -65,7 +66,55 @@ class TibberCollector:
         if not self.home_id:
             # Try to fetch home ID automatically
             self.home_id = self._get_home_id()
+
+        # Initialize database
+        self._init_database()
     
+    def _init_database(self) -> None:
+        """Initialize DuckDB database and create tables if they don't exist"""
+        with duckdb.connect(str(self.db_path)) as con:
+            # Create hourly consumption table
+            con.execute("""
+                CREATE TABLE IF NOT EXISTS hourly_consumption (
+                    from_time TIMESTAMP WITH TIME ZONE,
+                    to_time TIMESTAMP WITH TIME ZONE,
+                    consumption DOUBLE,
+                    consumption_unit VARCHAR,
+                    cost DOUBLE,
+                    unit_price DOUBLE,
+                    unit_price_vat DOUBLE,
+                    currency VARCHAR,
+                    PRIMARY KEY (from_time, to_time)
+                )
+            """)
+
+            # Create daily aggregation table
+            con.execute("""
+                CREATE TABLE IF NOT EXISTS daily_consumption (
+                    date DATE,
+                    total_consumption DOUBLE,
+                    total_cost DOUBLE,
+                    avg_unit_price DOUBLE,
+                    currency VARCHAR,
+                    PRIMARY KEY (date)
+                )
+            """)
+
+            # Create monthly aggregation table
+            con.execute("""
+                CREATE TABLE IF NOT EXISTS monthly_consumption (
+                    year INTEGER,
+                    month INTEGER,
+                    total_consumption DOUBLE,
+                    total_cost DOUBLE,
+                    avg_unit_price DOUBLE,
+                    currency VARCHAR,
+                    PRIMARY KEY (year, month)
+                )
+            """)
+
+            print(f"✅ Database initialized at {self.db_path}")
+
     def _get_home_id(self) -> str:
         """Automatically fetch the first available home ID"""
         query = """
@@ -139,25 +188,17 @@ class TibberCollector:
     
     def _get_last_timestamp(self) -> Optional[datetime]:
         """Get the timestamp of the most recent data point in storage"""
-        if not self.data_file.exists():
-            return None
-        
         try:
-            df = pl.read_csv(self.data_file, separator='\t')
-            if len(df) == 0:
+            with duckdb.connect(str(self.db_path)) as con:
+                result = con.execute("""
+                    SELECT MAX(from_time) as last_time
+                    FROM hourly_consumption
+                """).fetchone()
+
+                if result and result[0]:
+                    # Convert to Python datetime
+                    return result[0]
                 return None
-            
-            # Parse the 'from' timestamp and get the maximum
-            # Use map_elements to handle timezone-aware datetimes
-            df_with_dates = df.with_columns(
-                pl.col('from').map_elements(
-                    lambda x: datetime.fromisoformat(x.replace('Z', '+00:00')),
-                    return_dtype=pl.Datetime("us", "UTC")
-                ).alias('from_dt')
-            )
-            
-            last_timestamp = df_with_dates['from_dt'].max()
-            return last_timestamp
         except Exception as e:
             print(f"⚠️  Could not read last timestamp: {e}")
             return None
@@ -218,16 +259,23 @@ class TibberCollector:
             if max_records and len(all_edges) >= max_records:
                 print(f"✅ Reached max records limit ({max_records})")
                 break
-            
+
             page_count += 1
             print(f"📄 Fetching page {page_count}...")
-            
+
             # Build query with pagination
-            query = self._build_consumption_query(
-                resolution=resolution,
-                first=page_size,
-                after=cursor
-            )
+            # Use 'last' on first page to get most recent data
+            if cursor is None:
+                query = self._build_consumption_query(
+                    resolution=resolution,
+                    last=page_size
+                )
+            else:
+                query = self._build_consumption_query(
+                    resolution=resolution,
+                    first=page_size,
+                    after=cursor
+                )
             
             response = self._make_request({'query': query})
             
@@ -291,7 +339,7 @@ class TibberCollector:
         # Convert to DataFrame
         df = pl.DataFrame([edge['node'] for edge in all_edges])
         
-        # Filter by date range if specified  
+        # Filter by date range if specified
         if since or until:
             # Parse datetime strings with timezone information
             df = df.with_columns(
@@ -300,12 +348,16 @@ class TibberCollector:
                     return_dtype=pl.Datetime("us", "UTC")
                 ).alias('from_dt')
             )
-            
+
             if since:
-                df = df.filter(pl.col('from_dt') >= since)
+                # Convert since to UTC for comparison
+                since_utc = since.astimezone(timezone.utc) if since.tzinfo else since.replace(tzinfo=timezone.utc)
+                df = df.filter(pl.col('from_dt') >= since_utc)
             if until:
-                df = df.filter(pl.col('from_dt') <= until)
-            
+                # Convert until to UTC for comparison
+                until_utc = until.astimezone(timezone.utc) if until.tzinfo else until.replace(tzinfo=timezone.utc)
+                df = df.filter(pl.col('from_dt') <= until_utc)
+
             df = df.drop('from_dt')
         
         print(f"✅ Final dataset: {len(df)} records")
@@ -315,16 +367,23 @@ class TibberCollector:
         self,
         resolution: str = "HOURLY",
         first: int = 1000,
-        after: Optional[str] = None
+        after: Optional[str] = None,
+        last: Optional[int] = None
     ) -> str:
         """Build a GraphQL query for consumption data"""
         after_clause = f', after: "{after}"' if after else ''
-        
+
+        # Use 'last' instead of 'first' to get recent data
+        if last is not None:
+            size_clause = f'last: {last}'
+        else:
+            size_clause = f'first: {first}'
+
         query = f"""
         {{
           viewer {{
             home(id: "{self.home_id}") {{
-              consumption(resolution: {resolution}, first: {first}{after_clause}) {{
+              consumption(resolution: {resolution}, {size_clause}{after_clause}) {{
                 pageInfo {{
                   hasNextPage
                   endCursor
@@ -350,34 +409,74 @@ class TibberCollector:
     
     def save_data(self, df: pl.DataFrame, append: bool = True) -> None:
         """
-        Save data to CSV file
-        
+        Save data to DuckDB database
+
         Args:
             df: DataFrame to save
-            append: If True, append to existing file (with deduplication)
+            append: If True, append to existing data (with deduplication via UPSERT)
         """
         if len(df) == 0:
             print("ℹ️  No data to save")
             return
-        
-        if append and self.data_file.exists():
-            # Load existing data
-            existing_df = pl.read_csv(self.data_file, separator='\t')
-            
-            # Combine and deduplicate
-            combined_df = pl.concat([existing_df, df])
-            combined_df = combined_df.unique(subset=['from', 'to'], keep='last')
-            
-            # Sort by timestamp
-            combined_df = combined_df.sort('from')
-            
-            print(f"💾 Saving {len(combined_df)} total records (removed duplicates)")
-            combined_df.write_csv(self.data_file, separator='\t')
-        else:
-            print(f"💾 Saving {len(df)} records")
-            df.write_csv(self.data_file, separator='\t')
-        
-        print(f"✅ Data saved to {self.data_file}")
+
+        # Rename columns to match database schema
+        df_renamed = df.rename({
+            'from': 'from_time',
+            'to': 'to_time',
+            'consumptionUnit': 'consumption_unit',
+            'unitPrice': 'unit_price',
+            'unitPriceVAT': 'unit_price_vat'
+        })
+
+        with duckdb.connect(str(self.db_path)) as con:
+            # Insert or replace data (DuckDB's way of handling duplicates)
+            con.execute("""
+                INSERT OR REPLACE INTO hourly_consumption
+                SELECT * FROM df_renamed
+            """)
+
+            record_count = con.execute("SELECT COUNT(*) FROM hourly_consumption").fetchone()[0]
+            print(f"💾 Saved {len(df)} new records")
+            print(f"📊 Total records in database: {record_count}")
+
+        # Update aggregation tables
+        self._update_aggregations()
+
+        print(f"✅ Data saved to {self.db_path}")
+
+    def _update_aggregations(self) -> None:
+        """Update daily and monthly aggregation tables"""
+        with duckdb.connect(str(self.db_path)) as con:
+            # Update daily aggregations
+            con.execute("""
+                INSERT OR REPLACE INTO daily_consumption
+                SELECT
+                    CAST(from_time AS DATE) as date,
+                    SUM(consumption) as total_consumption,
+                    SUM(cost) as total_cost,
+                    AVG(unit_price) as avg_unit_price,
+                    MAX(currency) as currency
+                FROM hourly_consumption
+                WHERE consumption IS NOT NULL
+                GROUP BY CAST(from_time AS DATE)
+            """)
+
+            # Update monthly aggregations
+            con.execute("""
+                INSERT OR REPLACE INTO monthly_consumption
+                SELECT
+                    EXTRACT(YEAR FROM from_time) as year,
+                    EXTRACT(MONTH FROM from_time) as month,
+                    SUM(consumption) as total_consumption,
+                    SUM(cost) as total_cost,
+                    AVG(unit_price) as avg_unit_price,
+                    MAX(currency) as currency
+                FROM hourly_consumption
+                WHERE consumption IS NOT NULL
+                GROUP BY EXTRACT(YEAR FROM from_time), EXTRACT(MONTH FROM from_time)
+            """)
+
+            print("📊 Updated daily and monthly aggregations")
     
     def collect(
         self,
@@ -426,9 +525,9 @@ def main():
         help='Tibber home ID (auto-detected if not provided)'
     )
     parser.add_argument(
-        '--data-file',
-        default='tibber_consumption_data.csv',
-        help='Output CSV file path'
+        '--db-path',
+        default='tibber_data.duckdb',
+        help='DuckDB database file path'
     )
     parser.add_argument(
         '--resolution',
@@ -455,7 +554,7 @@ def main():
     collector = TibberCollector(
         access_token=args.token,
         home_id=args.home_id,
-        data_file=args.data_file
+        db_path=args.db_path
     )
     
     collector.collect(

@@ -208,3 +208,7 @@ __marimo__/
 
 
 tibber_consumption_data.csv
+
+# DuckDB database
+*.duckdb
+*.duckdb.wal
