@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  tibber-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tibber-energy-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount the database file
+      - ./tibber_data.duckdb:/data/tibber_data.duckdb
+      # Mount the API code for development (optional, remove in production)
+      - ./api:/app
+    environment:
+      - DATABASE_PATH=/data/tibber_data.duckdb
+      # SECURITY: Set API_KEY to enable authentication
+      # Generate a secure key: openssl rand -hex 32
+      # - API_KEY=your-secret-api-key-here
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Optional: collector service that runs periodically
+  tibber-collector:
+    build:
+      context: .
+      dockerfile: Dockerfile.collector
+    container_name: tibber-collector
+    restart: unless-stopped
+    volumes:
+      - ./tibber_data.duckdb:/data/tibber_data.duckdb
+      - ./.env:/app/.env:ro
+    environment:
+      - DATABASE_PATH=/data/tibber_data.duckdb
+    # Run collector every hour
+    command: >
+      sh -c "while true; do
+        python tibber_collector.py --db-path /data/tibber_data.duckdb;
+        echo 'Sleeping for 1 hour...';
+        sleep 3600;
+      done"

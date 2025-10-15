@@ -1,0 +1,154 @@
+# Home Assistant Configuration Example
+# Add this to your configuration.yaml
+
+# ==============================================
+# REST Sensors for Tibber Energy API
+# ==============================================
+
+# IMPORTANT: Replace 'your-api-key-here' with your actual API key
+# If you haven't enabled authentication, remove the 'headers:' section
+
+sensor:
+  # Latest hourly consumption
+  - platform: rest
+    resource: http://localhost:8000/api/latest
+    headers:
+      X-API-Key: your-api-key-here  # Remove if no authentication
+    name: "Tibber Latest Consumption"
+    value_template: "{{ value_json.consumption }}"
+    unit_of_measurement: "kWh"
+    device_class: energy
+    state_class: measurement
+    json_attributes:
+      - from_time
+      - to_time
+      - cost
+      - unit_price
+      - currency
+    scan_interval: 3600  # Update every hour
+
+  # Latest cost
+  - platform: template
+    sensors:
+      tibber_latest_cost:
+        friendly_name: "Tibber Latest Cost"
+        value_template: "{{ state_attr('sensor.tibber_latest_consumption', 'cost') | float }}"
+        unit_of_measurement: "SEK"
+        device_class: monetary
+
+  # Latest unit price
+  - platform: template
+    sensors:
+      tibber_latest_price:
+        friendly_name: "Tibber Latest Price"
+        value_template: "{{ state_attr('sensor.tibber_latest_consumption', 'unit_price') | float }}"
+        unit_of_measurement: "SEK/kWh"
+
+  # Today's consumption (daily total)
+  - platform: rest
+    resource_template: "http://localhost:8000/api/daily/{{ now().strftime('%Y-%m-%d') }}"
+    headers:
+      X-API-Key: your-api-key-here  # Remove if no authentication
+    name: "Tibber Today Consumption"
+    value_template: "{{ value_json.total_consumption }}"
+    unit_of_measurement: "kWh"
+    device_class: energy
+    state_class: total
+    json_attributes:
+      - total_cost
+      - avg_unit_price
+      - date
+    scan_interval: 1800  # Update every 30 minutes
+
+  # Today's cost
+  - platform: template
+    sensors:
+      tibber_today_cost:
+        friendly_name: "Tibber Today Cost"
+        value_template: "{{ state_attr('sensor.tibber_today_consumption', 'total_cost') | float }}"
+        unit_of_measurement: "SEK"
+        device_class: monetary
+
+  # Total statistics
+  - platform: rest
+    resource: http://localhost:8000/api/stats
+    headers:
+      X-API-Key: your-api-key-here  # Remove if no authentication
+    name: "Tibber Total Stats"
+    value_template: "{{ value_json.total_consumption_kwh }}"
+    unit_of_measurement: "kWh"
+    device_class: energy
+    json_attributes:
+      - total_records
+      - date_range_start
+      - date_range_end
+      - total_cost
+      - currency
+    scan_interval: 3600
+
+# ==============================================
+# Lovelace Dashboard Card Example
+# ==============================================
+
+# Add this to your Lovelace dashboard:
+#
+# type: entities
+# title: Tibber Energy Monitoring
+# entities:
+#   - entity: sensor.tibber_latest_consumption
+#     name: Current Hour
+#   - entity: sensor.tibber_latest_cost
+#     name: Current Hour Cost
+#   - entity: sensor.tibber_latest_price
+#     name: Current Price
+#   - type: divider
+#   - entity: sensor.tibber_today_consumption
+#     name: Today Total
+#   - entity: sensor.tibber_today_cost
+#     name: Today Cost
+#   - type: divider
+#   - entity: sensor.tibber_total_stats
+#     name: All-Time Total
+
+# ==============================================
+# Advanced: History Stats
+# ==============================================
+
+# Track daily average consumption over the last week
+# sensor:
+#   - platform: statistics
+#     name: "Weekly Average Consumption"
+#     entity_id: sensor.tibber_today_consumption
+#     state_characteristic: mean
+#     max_age:
+#       days: 7
+
+# ==============================================
+# Automation Example: High Consumption Alert
+# ==============================================
+
+# automation:
+#   - alias: "Alert High Energy Consumption"
+#     trigger:
+#       - platform: numeric_state
+#         entity_id: sensor.tibber_latest_consumption
+#         above: 3.0  # kWh threshold
+#     action:
+#       - service: notify.mobile_app
+#         data:
+#           title: "High Energy Usage"
+#           message: "Current consumption: {{ states('sensor.tibber_latest_consumption') }} kWh"
+
+# ==============================================
+# Notes
+# ==============================================
+
+# 1. Replace 'localhost:8000' with your actual API host/port
+# 2. Replace 'your-api-key-here' with your actual API key
+# 3. If running API on different machine, use IP: http://192.168.1.x:8000
+# 4. If no authentication, remove all 'headers:' sections
+# 5. Adjust scan_interval based on your needs (in seconds)
+# 6. Change 'SEK' to your currency if different
+
+# For more sensor examples, see:
+# https://www.home-assistant.io/integrations/rest/
