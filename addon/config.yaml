@@ -1,0 +1,26 @@
+name: Tibber Energy API
+version: "1.0.0"
+slug: tibber_energy_api
+description: REST API for querying Tibber energy consumption data from DuckDB
+url: https://github.com/villaume/my_house_energy_consumption
+arch:
+  - aarch64
+  - amd64
+  - armhf
+  - armv7
+  - i386
+startup: application
+boot: auto
+ports:
+  8000/tcp: 8000
+ports_description:
+  8000/tcp: API web interface
+map:
+  - share:rw
+options:
+  api_key: ""
+  log_level: info
+schema:
+  api_key: str?
+  log_level: list(debug|info|warning|error)?
+image: ghcr.io/{arch}-addon-tibber-energy-api
