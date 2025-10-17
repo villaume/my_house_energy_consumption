@@ -7,12 +7,12 @@ from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
 from datetime import date, datetime
 from typing import Optional, List
-import duckdb
+import sqlite3
 import os
 from pathlib import Path
 
 # Configuration
-DB_PATH = os.getenv('DATABASE_PATH', '../tibber_data.duckdb')
+DB_PATH = os.getenv('DATABASE_PATH', '../tibber_data.sqlite')
 API_KEY = os.getenv('API_KEY', None)  # Set API_KEY environment variable to enable authentication
 
 # API Key security scheme
@@ -95,7 +95,9 @@ def get_db():
     db_path = Path(DB_PATH)
     if not db_path.exists():
         raise HTTPException(status_code=500, detail=f"Database not found at {db_path}")
-    return duckdb.connect(str(db_path), read_only=True)
+    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    conn.row_factory = sqlite3.Row  # Enable dict-like access
+    return conn
 
 
 @app.get("/")
@@ -119,7 +121,9 @@ async def health():
     """Health check endpoint"""
     try:
         con = get_db()
-        con.execute("SELECT 1").fetchone()
+        cur = con.cursor()
+        cur.execute("SELECT 1")
+        cur.fetchone()
         con.close()
         return {"status": "healthy"}
     except Exception as e:
@@ -134,27 +138,28 @@ async def get_hourly_data(
 ):
     """Get hourly consumption data"""
     con = get_db()
+    cur = con.cursor()
 
     query = "SELECT * FROM hourly_consumption WHERE 1=1"
     params = []
 
     if start_date:
-        query += " AND CAST(from_time AS DATE) >= ?"
-        params.append(start_date)
+        query += " AND DATE(from_time) >= ?"
+        params.append(str(start_date))
 
     if end_date:
-        query += " AND CAST(from_time AS DATE) <= ?"
-        params.append(end_date)
+        query += " AND DATE(from_time) <= ?"
+        params.append(str(end_date))
 
     query += " ORDER BY from_time DESC LIMIT ?"
     params.append(limit)
 
     try:
-        result = con.execute(query, params).fetchall()
-        columns = [desc[0] for desc in con.description]
+        cur.execute(query, params)
+        result = cur.fetchall()
         con.close()
 
-        return [dict(zip(columns, row)) for row in result]
+        return [dict(row) for row in result]
     except Exception as e:
         con.close()
         raise HTTPException(status_code=500, detail=str(e))
@@ -168,27 +173,28 @@ async def get_daily_data(
 ):
     """Get daily consumption data"""
     con = get_db()
+    cur = con.cursor()
 
     query = "SELECT * FROM daily_consumption WHERE 1=1"
     params = []
 
     if start_date:
         query += " AND date >= ?"
-        params.append(start_date)
+        params.append(str(start_date))
 
     if end_date:
         query += " AND date <= ?"
-        params.append(end_date)
+        params.append(str(end_date))
 
     query += " ORDER BY date DESC LIMIT ?"
     params.append(limit)
 
     try:
-        result = con.execute(query, params).fetchall()
-        columns = [desc[0] for desc in con.description]
+        cur.execute(query, params)
+        result = cur.fetchall()
         con.close()
 
-        return [dict(zip(columns, row)) for row in result]
+        return [dict(row) for row in result]
     except Exception as e:
         con.close()
         raise HTTPException(status_code=500, detail=str(e))
@@ -201,6 +207,7 @@ async def get_monthly_data(
 ):
     """Get monthly consumption data"""
     con = get_db()
+    cur = con.cursor()
 
     query = "SELECT * FROM monthly_consumption WHERE 1=1"
     params = []
@@ -213,11 +220,11 @@ async def get_monthly_data(
     params.append(limit)
 
     try:
-        result = con.execute(query, params).fetchall()
-        columns = [desc[0] for desc in con.description]
+        cur.execute(query, params)
+        result = cur.fetchall()
         con.close()
 
-        return [dict(zip(columns, row)) for row in result]
+        return [dict(row) for row in result]
     except Exception as e:
         con.close()
         raise HTTPException(status_code=500, detail=str(e))
@@ -227,9 +234,10 @@ async def get_monthly_data(
 async def get_stats():
     """Get overall statistics"""
     con = get_db()
+    cur = con.cursor()
 
     try:
-        result = con.execute("""
+        cur.execute("""
             SELECT
                 COUNT(*) as total_records,
                 MIN(from_time) as date_range_start,
@@ -238,12 +246,11 @@ async def get_stats():
                 SUM(cost) as total_cost,
                 MAX(currency) as currency
             FROM hourly_consumption
-        """).fetchone()
-
-        columns = [desc[0] for desc in con.description]
+        """)
+        result = cur.fetchone()
         con.close()
 
-        return dict(zip(columns, result))
+        return dict(result)
     except Exception as e:
         con.close()
         raise HTTPException(status_code=500, detail=str(e))
@@ -253,21 +260,22 @@ async def get_stats():
 async def get_latest():
     """Get the most recent consumption record"""
     con = get_db()
+    cur = con.cursor()
 
     try:
-        result = con.execute("""
+        cur.execute("""
             SELECT * FROM hourly_consumption
             ORDER BY from_time DESC
             LIMIT 1
-        """).fetchone()
+        """)
+        result = cur.fetchone()
 
         if not result:
             raise HTTPException(status_code=404, detail="No data found")
 
-        columns = [desc[0] for desc in con.description]
         con.close()
 
-        return dict(zip(columns, result))
+        return dict(result)
     except HTTPException:
         raise
     except Exception as e:
@@ -279,20 +287,21 @@ async def get_latest():
 async def get_daily_by_date(date: date):
     """Get consumption for a specific date"""
     con = get_db()
+    cur = con.cursor()
 
     try:
-        result = con.execute(
+        cur.execute(
             "SELECT * FROM daily_consumption WHERE date = ?",
-            [date]
-        ).fetchone()
+            [str(date)]
+        )
+        result = cur.fetchone()
 
         if not result:
             raise HTTPException(status_code=404, detail=f"No data found for {date}")
 
-        columns = [desc[0] for desc in con.description]
         con.close()
 
-        return dict(zip(columns, result))
+        return dict(result)
     except HTTPException:
         raise
     except Exception as e:
@@ -307,20 +316,21 @@ async def get_monthly_by_year_month(year: int, month: int):
         raise HTTPException(status_code=400, detail="Month must be between 1 and 12")
 
     con = get_db()
+    cur = con.cursor()
 
     try:
-        result = con.execute(
+        cur.execute(
             "SELECT * FROM monthly_consumption WHERE year = ? AND month = ?",
             [year, month]
-        ).fetchone()
+        )
+        result = cur.fetchone()
 
         if not result:
             raise HTTPException(status_code=404, detail=f"No data found for {year}-{month:02d}")
 
-        columns = [desc[0] for desc in con.description]
         con.close()
 
-        return dict(zip(columns, result))
+        return dict(result)
     except HTTPException:
         raise
     except Exception as e:

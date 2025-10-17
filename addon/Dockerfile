@@ -1,28 +1,20 @@
-ARG BUILD_FROM
-FROM $BUILD_FROM
+# Use Python Alpine base instead of Home Assistant base
+FROM python:3.11-alpine
 
 # Install system dependencies
 RUN apk add --no-cache \
-    python3 \
-    py3-pip \
-    curl \
-    g++ \
-    gcc \
-    python3-dev \
-    musl-dev
+    curl
 
 # Upgrade pip
-RUN pip3 install --break-system-packages --upgrade pip
+RUN pip install --upgrade pip
 
 # Install Python dependencies (only what the API actually needs)
-RUN pip3 install --break-system-packages --no-cache-dir \
+# SQLite is included with Python, no need to install separately
+RUN pip install --no-cache-dir \
     fastapi \
     pydantic \
     uvicorn[standard] \
     python-dotenv
-
-# Install duckdb with build tools available
-RUN pip3 install --break-system-packages --no-cache-dir duckdb==0.9.2
 
 # Set working directory
 WORKDIR /app
@@ -30,11 +22,15 @@ WORKDIR /app
 # Copy API files
 COPY api/ /app/
 
-# Copy run script
-COPY run.sh /
-RUN chmod a+x /run.sh
+# Copy and setup entrypoint script
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Set environment variables
+ENV DATABASE_PATH=/share/tibber_data.sqlite
 
 # Expose port
 EXPOSE 8000
 
-CMD [ "/run.sh" ]
+# Use entrypoint script
+CMD ["/entrypoint.sh"]
