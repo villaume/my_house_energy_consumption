@@ -1,29 +1,35 @@
-#!/usr/bin/with-contenv bashio
-
-# Get configuration
-API_KEY=$(bashio::config 'api_key')
-LOG_LEVEL=$(bashio::config 'log_level')
+#!/usr/bin/env bash
+set -e
 
 # Set environment variables
-export DATABASE_PATH="/share/tibber_data.duckdb"
+export DATABASE_PATH="/share/tibber_data.sqlite"
+
+# Get configuration from options
+CONFIG_PATH="/data/options.json"
+if [ -f "$CONFIG_PATH" ]; then
+    API_KEY=$(jq -r '.api_key // empty' $CONFIG_PATH)
+    LOG_LEVEL=$(jq -r '.log_level // "info"' $CONFIG_PATH)
+else
+    API_KEY=""
+    LOG_LEVEL="info"
+fi
 
 if [ -n "$API_KEY" ]; then
-    bashio::log.info "API key authentication enabled"
+    echo "[INFO] API key authentication enabled"
     export API_KEY="$API_KEY"
 else
-    bashio::log.warning "API key not set - API will be open to all requests"
+    echo "[WARN] API key not set - API will be open to all requests"
 fi
 
 # Log configuration
-bashio::log.info "Starting Tibber Energy API..."
-bashio::log.info "Database path: ${DATABASE_PATH}"
-bashio::log.info "Log level: ${LOG_LEVEL}"
+echo "[INFO] Starting Tibber Energy API..."
+echo "[INFO] Database path: ${DATABASE_PATH}"
+echo "[INFO] Log level: ${LOG_LEVEL}"
 
 # Check if database exists
 if [ ! -f "$DATABASE_PATH" ]; then
-    bashio::log.warning "Database not found at ${DATABASE_PATH}"
-    bashio::log.warning "Please run tibber_collector.py to create the database"
-    bashio::log.info "You can copy an existing database to /share/tibber_data.duckdb"
+    echo "[WARN] Database not found at ${DATABASE_PATH}"
+    echo "[WARN] Please copy tibber_data.sqlite to /share/"
 fi
 
 # Start the API
