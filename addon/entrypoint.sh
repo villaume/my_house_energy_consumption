@@ -5,15 +5,31 @@ set -e
 CONFIG_PATH="/data/options.json"
 
 if [ -f "$CONFIG_PATH" ]; then
-    # Extract API key from config
+    # Extract configuration values
     API_KEY=$(cat $CONFIG_PATH | grep -o '"api_key"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"\([^"]*\)"/\1/')
     LOG_LEVEL=$(cat $CONFIG_PATH | grep -o '"log_level"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"\([^"]*\)"/\1/')
+    TIBBER_TOKEN=$(cat $CONFIG_PATH | grep -o '"tibber_token"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"\([^"]*\)"/\1/')
+    TIBBER_HOME_ID=$(cat $CONFIG_PATH | grep -o '"tibber_home_id"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"\([^"]*\)"/\1/')
 
+    # Export API key for FastAPI
     if [ -n "$API_KEY" ] && [ "$API_KEY" != "" ]; then
         export API_KEY="$API_KEY"
         echo "[INFO] API key authentication enabled"
     else
         echo "[WARN] No API key configured - API is open"
+    fi
+
+    # Export Tibber credentials
+    if [ -n "$TIBBER_TOKEN" ] && [ "$TIBBER_TOKEN" != "" ]; then
+        export TIBBER_TOKEN="$TIBBER_TOKEN"
+        echo "[INFO] Tibber token configured"
+    else
+        echo "[WARN] No Tibber token configured"
+    fi
+
+    if [ -n "$TIBBER_HOME_ID" ] && [ "$TIBBER_HOME_ID" != "" ]; then
+        export TIBBER_HOME_ID="$TIBBER_HOME_ID"
+        echo "[INFO] Tibber home ID configured"
     fi
 
     if [ -z "$LOG_LEVEL" ]; then

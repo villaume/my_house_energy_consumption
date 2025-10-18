@@ -338,6 +338,37 @@ async def get_monthly_by_year_month(year: int, month: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/collect")
+async def trigger_collection():
+    """Trigger data collection from Tibber API"""
+    import subprocess
+    import os
+
+    try:
+        # Run the collector script
+        result = subprocess.run(
+            ["python3", "/tibber_collector_sqlite.py", "--db-path", "/share/tibber_data.sqlite"],
+            capture_output=True,
+            text=True,
+            timeout=120
+        )
+
+        if result.returncode == 0:
+            return {
+                "status": "success",
+                "message": "Data collection completed",
+                "output": result.stdout
+            }
+        else:
+            return {
+                "status": "error",
+                "message": "Data collection failed",
+                "error": result.stderr
+            }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Collection failed: {str(e)}")
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

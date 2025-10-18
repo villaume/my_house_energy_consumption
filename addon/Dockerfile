@@ -14,13 +14,17 @@ RUN pip install --no-cache-dir \
     fastapi \
     pydantic \
     uvicorn[standard] \
-    python-dotenv
+    python-dotenv \
+    httpx
 
 # Set working directory
 WORKDIR /app
 
 # Copy API files
 COPY api/ /app/
+
+# Copy collector script
+COPY tibber_collector_sqlite.py /tibber_collector_sqlite.py
 
 # Copy and setup entrypoint script
 COPY entrypoint.sh /entrypoint.sh

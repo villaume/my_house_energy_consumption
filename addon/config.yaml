@@ -20,7 +20,10 @@ map:
 options:
   api_key: ""
   log_level: info
+  tibber_token: ""
+  tibber_home_id: ""
 schema:
   api_key: str?
   log_level: list(debug|info|warning|error)?
-image: ghcr.io/{arch}-addon-tibber-energy-api
+  tibber_token: str?
+  tibber_home_id: str?
